@@ -1240,21 +1240,18 @@ def process():
     # --------------------------------------------------------
 
     if not scenario_name:
-
         return jsonify({
             "success": False,
             "error": "Please enter a scenario name."
         }), 400
 
     if len(uploaded_files) < 2:
-
         return jsonify({
             "success": False,
             "error": "Please select at least 2 images."
         }), 400
 
     if not cloudinary_is_configured():
-
         return jsonify({
             "success": False,
             "error": (
@@ -1266,12 +1263,13 @@ def process():
         }), 500
 
     if not get_make_token():
-
         return jsonify({
             "success": False,
             "error": "MAKE_API_TOKEN is missing from .env."
         }), 500
 
+    scenario_id = None
+    scenario_active = False
 
     try:
 
@@ -1292,7 +1290,6 @@ def process():
         ):
 
             if not file.filename:
-
                 raise Exception(
                     f"Image {index} has no filename."
                 )
@@ -1314,7 +1311,6 @@ def process():
         print(
             "======================================="
         )
-
 
         # ----------------------------------------------------
         # FINAL URL LIST
@@ -1338,13 +1334,11 @@ def process():
             "===================================="
         )
 
-
         # ----------------------------------------------------
         # MAKE
         # ----------------------------------------------------
 
         headers = get_make_headers()
-
 
         print(
             f"Creating webhook: {scenario_name}"
@@ -1354,7 +1348,6 @@ def process():
             scenario_name,
             headers
         )
-
 
         print(
             f"Creating Make scenario: {scenario_name}"
@@ -1372,7 +1365,6 @@ def process():
             f"Scenario ID: {scenario_id}"
         )
 
-
         # ----------------------------------------------------
         # PREVIOUS EXECUTIONS
         # ----------------------------------------------------
@@ -1388,7 +1380,6 @@ def process():
             if get_log_execution_id(log)
         }
 
-
         # ----------------------------------------------------
         # ACTIVATE
         # ----------------------------------------------------
@@ -1402,6 +1393,7 @@ def process():
             headers
         )
 
+        scenario_active = True
 
         # ----------------------------------------------------
         # SEND
@@ -1415,7 +1407,6 @@ def process():
             hook["url"],
             links
         )
-
 
         # ----------------------------------------------------
         # WAIT
@@ -1444,43 +1435,26 @@ def process():
             f"Execution status: {execution_status}"
         )
 
-
-        # ----------------------------------------------------
-        # DEACTIVATE
-        # ----------------------------------------------------
-
-        print(
-            "Deactivating Make scenario..."
-        )
-
-        deactivate_scenario(
-            scenario_id,
-            headers
-        )
-
-
         # ----------------------------------------------------
         # RESULT
+        # Deactivation is handled in the finally block below.
+        # This guarantees cleanup even when Make returns an
+        # execution error or waiting raises a timeout.
         # ----------------------------------------------------
 
         if execution_status == 1:
-
             execution_result = "success"
 
         elif execution_status == 2:
-
             execution_result = "warning"
 
         elif execution_status == 3:
-
             execution_result = "error"
 
         else:
-
             execution_result = str(
                 execution_status
             )
-
 
         if execution_status == 3:
 
@@ -1502,9 +1476,7 @@ def process():
             )
 
             return jsonify({
-
                 "success": False,
-
                 "error": (
                     "Make execution failed.\n\n"
                     f"Scenario: {scenario_name}\n"
@@ -1512,34 +1484,22 @@ def process():
                     f"Execution ID: {execution_id}\n\n"
                     f"Make error:\n{make_error}"
                 ),
-
                 "scenario_name": scenario_name,
                 "scenario_id": scenario_id,
                 "execution_id": execution_id,
                 "execution_result": execution_result,
                 "cloudinary_urls": clean_links
-
             }), 500
 
-
         return jsonify({
-
             "success": True,
-
             "count": len(clean_links),
-
             "scenario_name": scenario_name,
-
             "scenario_id": scenario_id,
-
             "execution_id": execution_id,
-
             "execution_result": execution_result,
-
             "cloudinary_urls": clean_links
-
         })
-
 
     except Exception as e:
 
@@ -1553,16 +1513,61 @@ def process():
         )
 
         print(
-            "==========================="
+            "===========================" 
         )
 
         return jsonify({
-
             "success": False,
-
             "error": str(e)
-
         }), 500
+
+    finally:
+
+        # ----------------------------------------------------
+        # CRITICAL CLEANUP
+        # ----------------------------------------------------
+        # Once this app activates a newly-created Make scenario,
+        # it MUST be stopped after the run -- even if:
+        #   - image sending fails
+        #   - Make returns an execution error
+        #   - waiting times out
+        #   - another exception occurs
+        #
+        # This prevents cloned scenarios from accumulating as
+        # active scenarios and causing Make IM324.
+        # ----------------------------------------------------
+
+        if scenario_id is not None and scenario_active:
+
+            print()
+            print(
+                "========== MAKE CLEANUP =========="
+            )
+            print(
+                f"Deactivating Make scenario: {scenario_id}"
+            )
+
+            try:
+
+                deactivate_scenario(
+                    scenario_id,
+                    headers
+                )
+
+                print(
+                    "Scenario deactivated successfully."
+                )
+
+            except Exception as cleanup_error:
+
+                print(
+                    "Scenario deactivation failed during "
+                    f"cleanup: {cleanup_error}"
+                )
+
+            print(
+                "=================================="
+            )
 
 
 # ============================================================
